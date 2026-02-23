@@ -19,6 +19,39 @@ const STORAGE_KEY_GITHUB_TOKEN = "github_token";
 const STORAGE_KEY_AUTO_TRANSFER = "auto_transfer_to_github";
 const STORAGE_KEY_RESTORE_NOTE = "monaco_restore_note";
 const AUTO_TRANSFER_DEBOUNCE_MS = 2500;
+const TERMINAL_DB_KEY = "terminal_db";
+
+/** Odczyt bazy notatek z localStorage (LZString.decompress przy prefiksie "lz:", wsteczna kompatybilność z surowym JSON). */
+function getTerminalDbRaw() {
+    const raw = localStorage.getItem(TERMINAL_DB_KEY);
+    if (raw == null || raw === "") return "{}";
+    if (raw.startsWith("lz:") && typeof LZString !== "undefined") {
+        const decompressed = LZString.decompress(raw.slice(3));
+        return decompressed != null ? decompressed : "{}";
+    }
+    return raw;
+}
+
+/** Zwraca obiekt bazy notatek (parsowany JSON). */
+function getTerminalDb() {
+    try {
+        return JSON.parse(getTerminalDbRaw());
+    } catch (_) {
+        return {};
+    }
+}
+
+/** Zapis bazy notatek do localStorage z LZString.compress (ominięcie limitu ~5 MB). */
+function setTerminalDb(obj) {
+    const json = JSON.stringify(obj);
+    if (typeof LZString !== "undefined") {
+        const compressed = LZString.compress(json);
+        localStorage.setItem(TERMINAL_DB_KEY, "lz:" + compressed);
+    } else {
+        localStorage.setItem(TERMINAL_DB_KEY, json);
+    }
+}
+
 /** Obrazy ładowane dopiero na żądanie (np. przy wejściu w viewport) */
 const LAZY_IMAGE_REQUEST = true;
 /** Automatyczne przeładowanie obrazów (np. przy zmianie URL lub odświeżeniu) */
@@ -93,6 +126,103 @@ function loadSettings() {
 }
 
 loadSettings();
+
+// --- Kompresja (Brotli z fallback na gzip dla szerszej kompatybilności)
+// MessagePack: alternatywa dla mniejszego payloadu bez kompresji – wymaga biblioteki np. @msgpack/msgpack
+const COMPRESS_THRESHOLD_BYTES = 500; // minimalny rozmiar, od którego warto kompresować
+const STORAGE_COMPRESS_THRESHOLD = 8000; // powyżej tej długości JSON w localStorage używamy Brotli/gzip
+
+async function compressString(str, format = 'gzip') {
+    const encoder = new TextEncoder();
+    const blob = new Blob([encoder.encode(str)]);
+    const stream = blob.stream().pipeThrough(new CompressionStream(format || 'gzip'));
+    const chunks = [];
+    const reader = stream.getReader();
+    for (; ;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+    }
+    const total = chunks.reduce((a, c) => a + c.length, 0);
+    const out = new Uint8Array(total);
+    let offset = 0;
+    for (const c of chunks) { out.set(c, offset); offset += c.length; }
+    return out;
+}
+
+async function decompressBytes(bytes, format = 'gzip') {
+    const blob = new Blob([bytes]);
+    const stream = blob.stream().pipeThrough(new DecompressionStream(format || 'gzip'));
+    const chunks = [];
+    const reader = stream.getReader();
+    for (; ;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+    }
+    const total = chunks.reduce((a, c) => a + c.length, 0);
+    const out = new Uint8Array(total);
+    let offset = 0;
+    for (const c of chunks) { out.set(c, offset); offset += c.length; }
+    return new TextDecoder().decode(out);
+}
+
+async function compressForSync(jsonString) {
+    if (jsonString.length < COMPRESS_THRESHOLD_BYTES) return { data: jsonString, compressed: false };
+    try {
+        const buf = await compressString(jsonString, 'brotli');
+        const b64 = btoa(String.fromCharCode.apply(null, buf));
+        return { data: b64, compressed: true };
+    } catch (_) {
+        const buf = await compressString(jsonString, 'gzip');
+        const b64 = btoa(String.fromCharCode.apply(null, buf));
+        return { data: b64, compressed: true };
+    }
+}
+
+async function decompressFromSync(rawContent) {
+    if (typeof rawContent !== 'string') rawContent = new TextDecoder().decode(rawContent);
+    if (rawContent.startsWith('{') || rawContent.startsWith('[')) return rawContent;
+    try {
+        const binary = atob(rawContent);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+        return await decompressBytes(bytes, 'brotli');
+    } catch (_) {
+        try {
+            const binary = atob(rawContent);
+            const bytes = new Uint8Array(binary.length);
+            for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+            return await decompressBytes(bytes, 'gzip');
+        } catch (__) {
+            return rawContent;
+        }
+    }
+}
+
+async function compressForStorage(jsonString) {
+    if (jsonString.length < STORAGE_COMPRESS_THRESHOLD) return { data: jsonString, compressed: false };
+    try {
+        const buf = await compressString(jsonString, 'brotli');
+        const b64 = btoa(String.fromCharCode.apply(null, buf));
+        return { data: 'br:' + b64, compressed: true };
+    } catch (_) {
+        const buf = await compressString(jsonString, 'gzip');
+        const b64 = btoa(String.fromCharCode.apply(null, buf));
+        return { data: 'gz:' + b64, compressed: true };
+    }
+}
+
+function decompressFromStorage(raw) {
+    if (raw == null || raw === '') return raw;
+    if (typeof raw !== 'string' || (!raw.startsWith('br:') && !raw.startsWith('gz:'))) return raw;
+    const format = raw.startsWith('br:') ? 'brotli' : 'gzip';
+    const b64 = raw.slice(3);
+    const binary = atob(b64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return decompressBytes(bytes, format);
+}
 
 const CustomUI = {
     toastContainer: null,
@@ -448,11 +578,11 @@ function initMonaco() {
 
         var restoreName = localStorage.getItem(STORAGE_KEY_RESTORE_NOTE);
         if (restoreName) {
-            var saved = JSON.parse(localStorage.getItem('terminal_db') || '{}');
+            var saved = getTerminalDb();
             if (saved[restoreName]) {
                 var data = saved[restoreName];
                 editor.setValue(data.content || '');
-                monaco.editor.setModelLanguage(editor.getModel(), data.language || 'plaintext');
+                monaco.editor.setModelLanguage(editor.getModel(), data.mode || data.language || 'plaintext');
                 currentLoadedFile = { name: restoreName, source: 'local' };
                 lastSavedContent = editor.getValue();
                 hasUnsavedChanges = false;
@@ -625,10 +755,10 @@ window.openFile = async function () {
 window.saveLocally = async function () {
     const name = await CustomUI.prompt('NAZWA_REKORDU', 'Podaj nazwę...');
     if (name) {
-        const data = { content: editor.getValue(), language: editor.getModel().getLanguageId(), date: new Date().toLocaleString() };
-        let saved = JSON.parse(localStorage.getItem('terminal_db') || '{}');
+        const data = { content: editor.getValue(), mode: editor.getModel().getLanguageId(), date: new Date().toLocaleString() };
+        let saved = getTerminalDb();
         saved[name] = data;
-        localStorage.setItem('terminal_db', JSON.stringify(saved));
+        setTerminalDb(saved);
         scheduleAutoTransferToGitHub();
         CustomUI.toast("STORE_SUCCESS");
         markAsSaved();
@@ -637,12 +767,12 @@ window.saveLocally = async function () {
             if (currentLoadedFile && currentLoadedFile.source === 'local') {
                 const data = {
                     content: editor.getValue(),
-                    language: editor.getModel().getLanguageId(),
+                    mode: editor.getModel().getLanguageId(),
                     date: new Date().toLocaleString()
                 };
-                let saved = JSON.parse(localStorage.getItem('terminal_db') || '{}');
+                let saved = getTerminalDb();
                 saved[currentLoadedFile.name] = data;
-                localStorage.setItem('terminal_db', JSON.stringify(saved));
+                setTerminalDb(saved);
                 scheduleAutoTransferToGitHub();
                 markAsSaved();
                 CustomUI.toast('Zapisano: ' + currentLoadedFile.name, 'success');
@@ -669,21 +799,22 @@ window.updateLoadedNote = async function () {
 
     const data = {
         content: editor.getValue(),
-        language: editor.getModel().getLanguageId(),
+        mode: editor.getModel().getLanguageId(),
         date: new Date().toLocaleString()
     };
 
-    let saved = JSON.parse(localStorage.getItem('terminal_db') || '{}');
+    let saved = getTerminalDb();
     saved[currentLoadedFile.name] = data;
-    localStorage.setItem('terminal_db', JSON.stringify(saved));
+    setTerminalDb(saved);
     scheduleAutoTransferToGitHub();
     CustomUI.toast("NOTATKA ZAKTUALIZOWANA", "success");
     markAsSaved();
 };
 
 window.exportLocalDB = function () {
-    const saved = localStorage.getItem('terminal_db') || '{}';
-    const blob = new Blob([saved], { type: 'application/json' });
+    const arr = buildNotesArray();
+    const json = JSON.stringify(arr, null, 2);
+    const blob = new Blob([json], { type: 'application/json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
     a.download = `local_db_backup_${Date.now()}.json`;
@@ -714,18 +845,18 @@ window.importLocalDB = async function () {
                 let normalizedData = {};
                 if (Array.isArray(data)) {
                     data.forEach((item, index) => {
-                        const name = item.name || `imported_${index + 1}`;
+                        const name = (item.name != null && String(item.name).trim() !== "") ? String(item.name).trim() : `imported_${index + 1}`;
                         normalizedData[name] = {
-                            content: item.content || item.code || JSON.stringify(item, null, 2),
-                            language: item.language || 'plaintext',
-                            date: item.date || new Date().toLocaleString()
+                            content: item.content != null ? String(item.content) : (item.code || ""),
+                            date: item.date != null ? String(item.date) : new Date().toLocaleString(),
+                            mode: (item.mode != null ? String(item.mode) : item.language) || "plaintext"
                         };
                     });
                 } else if (typeof data === 'object') {
                     // Jeśli to już obiekt z kluczami, zachowaj go
                     normalizedData = data;
                 }
-                localStorage.setItem('terminal_db', JSON.stringify(normalizedData));
+                setTerminalDb(normalizedData);
                 scheduleAutoTransferToGitHub();
                 CustomUI.toast("IMPORT_SUCCESS", "success");
                 CustomUI.close();
@@ -827,25 +958,30 @@ function setAutoTransferToGitHub(enabled) {
     localStorage.setItem(STORAGE_KEY_AUTO_TRANSFER, enabled ? "true" : "false");
 }
 
-/** Buduje plik do wysyłki na GitHub: tylko notatki z LOCAL_DB, format [ { name, content, date, mode } ]. */
-function buildPushPayloadFromLocal() {
-    const saved = JSON.parse(localStorage.getItem("terminal_db") || "{}");
-    const arr = Object.entries(saved).map(([name, v]) => {
+/** Buduje tablicę do zapisu/repo: format [ { name, content, date, mode } ]. */
+function buildNotesArray() {
+    const saved = getTerminalDb();
+    return Object.entries(saved).map(([name, v]) => {
         if (!v || typeof v !== "object") return null;
         return {
             name: String(name),
             content: v.content != null ? String(v.content) : "",
             date: v.date != null ? String(v.date) : new Date().toLocaleString(),
-            mode: v.language != null ? String(v.language) : "plaintext"
+            mode: (v.mode != null ? String(v.mode) : v.language) || "plaintext"
         };
     }).filter(Boolean);
+}
+
+/** Buduje plik do wysyłki na GitHub: tylko notatki z LOCAL_DB, format [ { name, content, date, mode } ]. */
+function buildPushPayloadFromLocal() {
+    const arr = buildNotesArray();
     const json = JSON.stringify(arr, null, 2);
     return { json, arr };
 }
 
 /** Buduje zmergowany JSON (remote notes.json + local) – do schowka/pobrania przy ręcznym Push. */
 async function buildMergedNotesJson() {
-    const saved = JSON.parse(localStorage.getItem("terminal_db") || "{}");
+    const saved = getTerminalDb();
     let remoteArr = [];
     try {
         remoteArr = await fetchNotesJsonFromGitHub();
@@ -861,7 +997,7 @@ async function buildMergedNotesJson() {
             name: String(name),
             content: v.content != null ? String(v.content) : "",
             date: v.date != null ? String(v.date) : new Date().toLocaleString(),
-            mode: v.language != null ? String(v.language) : "plaintext"
+            mode: (v.mode != null ? String(v.mode) : v.language) || "plaintext"
         });
     });
     const arr = Array.from(remoteByName.values());
@@ -869,7 +1005,7 @@ async function buildMergedNotesJson() {
     return { json, arr };
 }
 
-/** Wysyła JSON na GitHub (PUT). Zwraca true jeśli OK. Rzuca lub zwraca false przy błędzie. */
+/** Wysyła JSON na GitHub (PUT). Zwraca true jeśli OK. Rzuca lub zwraca false przy błędzie. Używa Brotli/gzip przy większym payloadzie. */
 async function pushJsonToGitHubApi(json) {
     const token = getGitHubToken();
     if (!token) return false;
@@ -879,12 +1015,14 @@ async function pushJsonToGitHubApi(json) {
         const fileInfo = await getRes.json();
         sha = fileInfo.sha || null;
     }
+    const { data: payload, compressed } = await compressForSync(json);
+    const content = compressed ? payload : btoa(unescape(encodeURIComponent(json)));
     const putRes = await fetch(GITHUB_PUSH_API_URL, {
         method: "PUT",
         headers: getGitHubApiHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({
             message: "Update new-note.json",
-            content: btoa(unescape(encodeURIComponent(json))),
+            content: content,
             sha: sha || undefined
         })
     });
@@ -914,7 +1052,22 @@ function scheduleAutoTransferToGitHub() {
     }, AUTO_TRANSFER_DEBOUNCE_MS);
 }
 
-/** Pobiera notes.json z GitHub (z tokenem przez API lub bez tokenu przez raw URL). Zwraca tablicę notatek lub rzuca. */
+/** Odczytuje tablicę notatek z surowej odpowiedzi (JSON lub skompresowane Brotli/gzip). */
+async function parseNotesResponse(bytes) {
+    const first = bytes[0];
+    if (first === 0x7B || first === 0x5B) {
+        return JSON.parse(new TextDecoder().decode(bytes));
+    }
+    try {
+        const jsonString = await decompressBytes(bytes, 'brotli');
+        return JSON.parse(jsonString);
+    } catch (_) {
+        const jsonString = await decompressBytes(bytes, 'gzip');
+        return JSON.parse(jsonString);
+    }
+}
+
+/** Pobiera notes.json z GitHub (z tokenem przez API lub bez tokenu przez raw URL). Obsługuje payload skompresowany Brotli/gzip. Zwraca tablicę notatek lub rzuca. */
 async function fetchNotesJsonFromGitHub() {
     const token = getGitHubToken();
     if (token) {
@@ -925,20 +1078,21 @@ async function fetchNotesJsonFromGitHub() {
             const errBody = await res.text();
             throw new Error("HTTP " + res.status + (errBody ? ": " + errBody.slice(0, 80) : ""));
         }
-        const text = await res.text();
-        const data = JSON.parse(text);
+        const buf = await res.arrayBuffer();
+        const data = await parseNotesResponse(new Uint8Array(buf));
         if (!Array.isArray(data)) throw new Error("Oczekiwano tablicy w notes.json");
         return data;
     }
     const res = await fetch(NOTES_SYNC_URL);
     if (!res.ok) throw new Error("HTTP " + res.status);
-    const arr = await res.json();
+    const buf = await res.arrayBuffer();
+    const arr = await parseNotesResponse(new Uint8Array(buf));
     if (!Array.isArray(arr)) throw new Error("Oczekiwano tablicy");
     return arr;
 }
 
 window.showLocalFiles = function () {
-    const saved = JSON.parse(localStorage.getItem('terminal_db') || '{}');
+    const saved = getTerminalDb();
     const syncedSet = new Set(getSyncedNoteNames());
     const entries = Object.entries(saved);
     entries.sort((a, b) => {
@@ -1012,9 +1166,9 @@ window.deleteLocalFile = async function (name) {
         true
     );
     if (!confirmed) return;
-    const saved = JSON.parse(localStorage.getItem('terminal_db') || '{}');
+    const saved = getTerminalDb();
     delete saved[name];
-    localStorage.setItem('terminal_db', JSON.stringify(saved));
+    setTerminalDb(saved);
     if (currentLoadedFile && currentLoadedFile.name === name) {
         currentLoadedFile = null;
         editor.setValue('');
@@ -1035,7 +1189,7 @@ window.deleteAllLocalNotes = async function () {
         true
     );
     if (!confirmed) return;
-    localStorage.setItem('terminal_db', '{}');
+    setTerminalDb({});
     currentLoadedFile = null;
     editor.setValue('');
     monaco.editor.setModelLanguage(editor.getModel(), 'plaintext');
@@ -1055,9 +1209,9 @@ window.loadLocal = async function (name) {
         );
         if (!confirmed) return;
     }
-    const data = JSON.parse(localStorage.getItem('terminal_db'))[name];
-    editor.setValue(data.content);
-    monaco.editor.setModelLanguage(editor.getModel(), data.language);
+    const data = getTerminalDb()[name];
+    editor.setValue(data.content != null ? data.content : "");
+    monaco.editor.setModelLanguage(editor.getModel(), data.mode || data.language || "plaintext");
     currentLoadedFile = { name: name, source: 'local' };
     localStorage.setItem(STORAGE_KEY_RESTORE_NOTE, name);
     markAsSaved();
@@ -1124,20 +1278,20 @@ window.showGitHubFiles = function () {
 window.pullNotesFromGitHub = async function () {
     try {
         const arr = await fetchNotesJsonFromGitHub();
-        const saved = JSON.parse(localStorage.getItem("terminal_db") || "{}");
+        const saved = getTerminalDb();
         const syncedNames = [];
         let count = 0;
         arr.forEach((item) => {
             const name = item.name || "item_" + count;
             syncedNames.push(name);
             saved[name] = {
-                content: item.content != null ? item.content : "",
-                language: item.mode || "plaintext",
-                date: item.date || new Date().toLocaleString()
+                content: item.content != null ? String(item.content) : "",
+                date: item.date != null ? String(item.date) : new Date().toLocaleString(),
+                mode: (item.mode != null ? String(item.mode) : item.language) || "plaintext"
             };
             count++;
         });
-        localStorage.setItem("terminal_db", JSON.stringify(saved));
+        setTerminalDb(saved);
         setSyncedNoteNames(syncedNames);
         showLocalFiles();
         CustomUI.toast("Pull OK: " + count + " notatek", "success");
@@ -1186,7 +1340,7 @@ window.loadGit = async function (idx) {
     }
     const file = window._gitFiles[idx];
     editor.setValue(file.content || file.code || JSON.stringify(file, null, 2));
-    if (file.mode) monaco.editor.setModelLanguage(editor.getModel(), file.mode);
+    monaco.editor.setModelLanguage(editor.getModel(), file.mode || file.language || "plaintext");
     currentLoadedFile = { name: file.name || 'GIT_NODE_' + idx, source: 'github' };
     markAsSaved();
     syncSyntaxSelectFromModel();
@@ -2029,4 +2183,3 @@ document.addEventListener("DOMContentLoaded", function () {
         }
     });
 });
-
