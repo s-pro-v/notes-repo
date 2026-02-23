@@ -1,5 +1,5 @@
 /**
-       * --- SYSTEM CORE ---
+      * --- SYSTEM CORE ---
        */
 let editor;
 let monacoLoaded = false;
@@ -2183,3 +2183,4 @@ document.addEventListener("DOMContentLoaded", function () {
         }
     });
 });
+
