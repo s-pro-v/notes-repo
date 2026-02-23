@@ -6,7 +6,7 @@ let monacoLoaded = false;
 let isAutoDetectEnabled = true;
 const GITHUB_USER = "skokivPr";
 const GITHUB_REPO = "json-lista";
-const GITHUB_FILE = "new-note.json";
+const GITHUB_FILE = "notes.json";
 /** URL do notes.json dla Pull/Push (s-pro-v/json-lista, main) */
 const NOTES_SYNC_URL = "https://raw.githubusercontent.com/s-pro-v/json-lista/main/notes.json";
 const GITHUB_SYNC_OWNER = "s-pro-v";
@@ -2029,3 +2029,4 @@ document.addEventListener("DOMContentLoaded", function () {
         }
     });
 });
+
