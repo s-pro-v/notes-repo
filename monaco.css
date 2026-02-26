@@ -1280,11 +1280,7 @@ body {
     box-shadow: var(--shadow-drop);
 }
 
-.custom-modal-actions-three {
-    flex-wrap: wrap;
-    justify-content: flex-end;
-    gap: 0.5rem;
-}
+
 
 .custom-btn-reload {
     background: var(--bg-tertiary);
