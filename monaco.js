@@ -1,19 +1,19 @@
 /**
-      * --- SYSTEM CORE ---
+       * --- SYSTEM CORE ---
        */
 let editor;
 let monacoLoaded = false;
 let isAutoDetectEnabled = true;
-const GITHUB_USER = "skokivPr";
+const GITHUB_USER = "s-pro-v";
 const GITHUB_REPO = "json-lista";
-const GITHUB_FILE = "notes.json";
-/** URL do notes.json dla Pull/Push (s-pro-v/json-lista, main) */
-const NOTES_SYNC_URL = "https://raw.githubusercontent.com/s-pro-v/json-lista/main/notes.json";
-const GITHUB_SYNC_OWNER = "s-pro-v";
-const GITHUB_NOTES_API_URL = `https://api.github.com/repos/${GITHUB_SYNC_OWNER}/${GITHUB_REPO}/contents/${GITHUB_FILE}`;
-/** Plik na GitHubie, do którego Push wrzuca dane (repo s-pro-v/json-lista, main) */
-const PUSH_TARGET_FILE = "new-note.json";
-const GITHUB_PUSH_API_URL = `https://api.github.com/repos/${GITHUB_SYNC_OWNER}/${GITHUB_REPO}/contents/${PUSH_TARGET_FILE}`;
+const GITHUB_FILE = "terminal.json";
+/** URL do terminal.json dla Pull/Push (s-pro-v/json-lista, main) */
+const NOTES_SYNC_URL = `https://raw.githubusercontent.com/${GITHUB_USER}/${GITHUB_REPO}/main/${GITHUB_FILE}`;
+const GITHUB_SYNC_OWNER = GITHUB_USER;
+const GITHUB_NOTES_API_URL = `https://api.github.com/repos/${GITHUB_USER}/${GITHUB_REPO}/contents/${GITHUB_FILE}`;
+/** Push do tego samego pliku co Pull (terminal.json) – jedno repozytorium z aktualnymi wartościami */
+const GITHUB_PUSH_API_URL = `https://api.github.com/repos/${GITHUB_USER}/${GITHUB_REPO}/contents/${GITHUB_FILE}`;
+const GITHUB_BRANCH = "main";
 const STORAGE_KEY_SYNCED_NAMES = "notes_synced_to_github";
 const STORAGE_KEY_GITHUB_TOKEN = "github_token";
 const STORAGE_KEY_AUTO_TRANSFER = "auto_transfer_to_github";
@@ -281,7 +281,7 @@ const CustomUI = {
             <h2 class="custom-modal-title">${T}</h2>
             <p class="custom-modal-message">${M}</p>
             <div class="custom-modal-actions">
-                <button class="custom-btn custom-btn-confirm">OK</button>
+                <button class="custom-btn custom-btn-confirm"><i class="fas fa-check"></i> OK</button>
             </div>
         `;
         modal.querySelector('button').onclick = () => this.close();
@@ -298,8 +298,8 @@ const CustomUI = {
                 <h2 class="custom-modal-title">${T}</h2>
                 <p class="custom-modal-message">${M}</p>
                 <div class="custom-modal-actions">
-                    <button class="custom-btn custom-btn-cancel">${XT}</button>
-                    <button class="custom-btn ${isDanger ? 'custom-btn-danger' : 'custom-btn-confirm'}">${CT}</button>
+                    <button class="custom-btn custom-btn-cancel"><i class="fas fa-xmark"></i>${XT}</button>
+                    <button class="custom-btn ${isDanger ? 'custom-btn-danger' : 'custom-btn-confirm'}"><i class="fas fa-check"></i>${CT}</button>
                 </div>
             `;
             const confirmBtn = modal.querySelector('.custom-btn-confirm, .custom-btn-danger');
@@ -320,8 +320,8 @@ const CustomUI = {
                 <p class="custom-modal-message">${L}</p>
                 <input type="text" class="custom-input custom-prompt-input" value="${def}" autocomplete="off">
                 <div class="custom-modal-actions">
-                    <button class="custom-btn custom-btn-cancel">Anuluj</button>
-                    <button class="custom-btn custom-btn-confirm">Zatwierdź</button>
+                    <button class="custom-btn custom-btn-cancel"><i class="fas fa-xmark"></i> Anuluj</button>
+                    <button class="custom-btn custom-btn-confirm"><i class="fas fa-check"></i> Zatwierdź</button>
                 </div>
             `;
             const input = modal.querySelector('input');
@@ -349,7 +349,7 @@ const CustomUI = {
             <h2 class="custom-modal-title">${T}</h2>
             <div class="custom-modal-content">${htmlContent}</div>
             <div class="custom-modal-actions">
-                <button class="custom-btn custom-btn-cancel">Zamknij</button>
+                <button class="custom-btn custom-btn-cancel"><i class="fas fa-xmark"></i> Zamknij</button>
             </div>
         `;
         modal.querySelector('.custom-btn-cancel').onclick = () => this.close();
@@ -391,9 +391,9 @@ const CustomUI = {
                 <h2 class="custom-modal-title">Niezapisane zmiany</h2>
                 <p class="custom-modal-message">Masz niezapisane zmiany. Zapisać przed odświeżeniem?</p>
                 <div class="custom-modal-actions custom-modal-actions-three">
-                    <button class="custom-btn custom-btn-cancel" data-choice="cancel">Anuluj</button>
-                    <button class="custom-btn custom-btn-reload" data-choice="reload">Odśwież bez zapisu</button>
-                    <button class="custom-btn custom-btn-confirm" data-choice="save">Zapisz i odśwież</button>
+                    <button class="custom-btn custom-btn-cancel" data-choice="cancel"><i class="fas fa-xmark"></i> Anuluj</button>
+                    <button class="custom-btn custom-btn-reload" data-choice="reload"><i class="fas fa-rotate-right"></i> Odśwież bez zapisu</button>
+                    <button class="custom-btn custom-btn-confirm" data-choice="save"><i class="fas fa-floppy-disk"></i> Zapisz i odśwież</button>
                 </div>
             `;
             modal.querySelectorAll('[data-choice]').forEach((btn) => {
@@ -752,6 +752,25 @@ window.openFile = async function () {
     input.click();
 };
 
+/** Szybki zapis do LOCAL_DB: jeśli notatka załadowana – zapis w miejscu; jeśli nie – prośba o nazwę (żeby nic nie utracić). */
+window.quickSaveLocally = async function () {
+    if (currentLoadedFile && currentLoadedFile.source === 'local') {
+        const data = {
+            content: editor.getValue(),
+            mode: editor.getModel().getLanguageId(),
+            date: new Date().toLocaleString()
+        };
+        let saved = getTerminalDb();
+        saved[currentLoadedFile.name] = data;
+        setTerminalDb(saved);
+        scheduleAutoTransferToGitHub();
+        markAsSaved();
+        CustomUI.toast('Zapisano: ' + currentLoadedFile.name, 'success');
+        return;
+    }
+    await saveLocally();
+};
+
 window.saveLocally = async function () {
     const name = await CustomUI.prompt('NAZWA_REKORDU', 'Podaj nazwę...');
     if (name) {
@@ -762,25 +781,6 @@ window.saveLocally = async function () {
         scheduleAutoTransferToGitHub();
         CustomUI.toast("STORE_SUCCESS");
         markAsSaved();
-        /** Szybki zapis do LOCAL_DB: jeśli notatka załadowana – zapis w miejscu; jeśli nie – prośba o nazwę (żeby nic nie utracić). */
-        window.quickSaveLocally = async function () {
-            if (currentLoadedFile && currentLoadedFile.source === 'local') {
-                const data = {
-                    content: editor.getValue(),
-                    mode: editor.getModel().getLanguageId(),
-                    date: new Date().toLocaleString()
-                };
-                let saved = getTerminalDb();
-                saved[currentLoadedFile.name] = data;
-                setTerminalDb(saved);
-                scheduleAutoTransferToGitHub();
-                markAsSaved();
-                CustomUI.toast('Zapisano: ' + currentLoadedFile.name, 'success');
-                return;
-            }
-            await saveLocally();
-        };
-
     }
 };
 
@@ -979,7 +979,7 @@ function buildPushPayloadFromLocal() {
     return { json, arr };
 }
 
-/** Buduje zmergowany JSON (remote notes.json + local) – do schowka/pobrania przy ręcznym Push. */
+/** Buduje zmergowany JSON (remote terminal.json + local) – do schowka/pobrania przy ręcznym Push. */
 async function buildMergedNotesJson() {
     const saved = getTerminalDb();
     let remoteArr = [];
@@ -1010,21 +1010,24 @@ async function pushJsonToGitHubApi(json) {
     const token = getGitHubToken();
     if (!token) return false;
     let sha = null;
-    const getRes = await fetch(GITHUB_PUSH_API_URL, { headers: getGitHubApiHeaders() });
+    const getUrl = GITHUB_PUSH_API_URL + "?ref=" + encodeURIComponent(GITHUB_BRANCH);
+    const getRes = await fetch(getUrl, { headers: getGitHubApiHeaders() });
     if (getRes.ok) {
         const fileInfo = await getRes.json();
         sha = fileInfo.sha || null;
     }
     const { data: payload, compressed } = await compressForSync(json);
     const content = compressed ? payload : btoa(unescape(encodeURIComponent(json)));
+    const putBody = {
+        message: "Update terminal.json",
+        content: content,
+        branch: GITHUB_BRANCH
+    };
+    if (sha) putBody.sha = sha;
     const putRes = await fetch(GITHUB_PUSH_API_URL, {
         method: "PUT",
         headers: getGitHubApiHeaders({ "Content-Type": "application/json" }),
-        body: JSON.stringify({
-            message: "Update new-note.json",
-            content: content,
-            sha: sha || undefined
-        })
+        body: JSON.stringify(putBody)
     });
     if (!putRes.ok) {
         let errText = await putRes.text();
@@ -1042,21 +1045,26 @@ function scheduleAutoTransferToGitHub() {
     autoTransferToGitHubTimer = setTimeout(async () => {
         autoTransferToGitHubTimer = null;
         try {
-            const { json, arr } = buildPushPayloadFromLocal();
+            const { json, arr } = await buildMergedNotesJson();
             await pushJsonToGitHubApi(json);
             setSyncedNoteNames(arr.map((item) => item.name));
-            CustomUI.toast("Auto: wgrano do GitHub", "success");
+            CustomUI.toast("Auto: wgrano do GitHub (terminal.json)", "success");
         } catch (e) {
-            CustomUI.toast("Auto transfer: " + (e.message || String(e)), "error");
+            const msg = e && (e.message || String(e));
+            const hint = /failed to fetch|network| cors/i.test(msg) ? " (otwórz stronę przez http:// lub sprawdź sieć)" : "";
+            CustomUI.toast("Auto transfer: " + msg + hint, "error");
         }
     }, AUTO_TRANSFER_DEBOUNCE_MS);
 }
 
 /** Odczytuje tablicę notatek z surowej odpowiedzi (JSON lub skompresowane Brotli/gzip). */
 async function parseNotesResponse(bytes) {
+    if (!bytes || !bytes.length) return [];
     const first = bytes[0];
     if (first === 0x7B || first === 0x5B) {
-        return JSON.parse(new TextDecoder().decode(bytes));
+        const text = new TextDecoder().decode(bytes);
+        const parsed = JSON.parse(text || "[]");
+        return Array.isArray(parsed) ? parsed : [];
     }
     try {
         const jsonString = await decompressBytes(bytes, 'brotli');
@@ -1067,28 +1075,29 @@ async function parseNotesResponse(bytes) {
     }
 }
 
-/** Pobiera notes.json z GitHub (z tokenem przez API lub bez tokenu przez raw URL). Obsługuje payload skompresowany Brotli/gzip. Zwraca tablicę notatek lub rzuca. */
+/** Pobiera terminal.json z GitHub (z tokenem przez API lub bez tokenu przez raw URL). Obsługuje payload skompresowany Brotli/gzip. Zwraca tablicę notatek; 404 = []. */
 async function fetchNotesJsonFromGitHub() {
     const token = getGitHubToken();
+    const apiUrl = GITHUB_NOTES_API_URL + "?ref=" + encodeURIComponent(GITHUB_BRANCH);
     if (token) {
-        const res = await fetch(GITHUB_NOTES_API_URL, {
+        const res = await fetch(apiUrl, {
             headers: getGitHubApiHeaders({ Accept: "application/vnd.github.raw" })
         });
+        if (res.status === 404) return [];
         if (!res.ok) {
             const errBody = await res.text();
-            throw new Error("HTTP " + res.status + (errBody ? ": " + errBody.slice(0, 80) : ""));
+            throw new Error("HTTP " + res.status + (errBody ? ": " + errBody.slice(0, 120) : ""));
         }
         const buf = await res.arrayBuffer();
         const data = await parseNotesResponse(new Uint8Array(buf));
-        if (!Array.isArray(data)) throw new Error("Oczekiwano tablicy w notes.json");
-        return data;
+        return Array.isArray(data) ? data : [];
     }
     const res = await fetch(NOTES_SYNC_URL);
+    if (res.status === 404) return [];
     if (!res.ok) throw new Error("HTTP " + res.status);
     const buf = await res.arrayBuffer();
     const arr = await parseNotesResponse(new Uint8Array(buf));
-    if (!Array.isArray(arr)) throw new Error("Oczekiwano tablicy");
-    return arr;
+    return Array.isArray(arr) ? arr : [];
 }
 
 window.showLocalFiles = function () {
@@ -1143,6 +1152,9 @@ window.showLocalFiles = function () {
         <h2>LOCAL_DB</h2>
         <div class="custom-modal-content">${html}</div>
         <div class="custom-modal-actions">
+            <button class="custom-btn custom-btn-confirm" onclick="pushLocalToGitHub()" title="Wyślij LOCAL_DB do repozytorium (merge → terminal.json)">
+                <i class="fas fa-cloud-upload-alt"></i> Wyślij do repozytorium
+            </button>
             <button class="custom-btn custom-btn-confirm" onclick="exportLocalDB()">
                 <i class="fas fa-download"></i> Export JSON
             </button>
@@ -1152,7 +1164,7 @@ window.showLocalFiles = function () {
             <button class="custom-btn custom-btn-danger" onclick="deleteAllLocalNotes()" title="Usuń wszystkie notatki">
                 <i class="fas fa-trash-alt"></i> Usuń wszystkie
             </button>
-            <button class="custom-btn custom-btn-cancel" onclick="CustomUI.close()">Zamknij</button>
+            <button class="custom-btn custom-btn-cancel" onclick="CustomUI.close()"><i class="fas fa-xmark"></i> Zamknij</button>
         </div>
     `;
 };
@@ -1264,13 +1276,13 @@ window.showGitHubFiles = function () {
         <h2>GITHUB_EXPLORER</h2>
         <div class="custom-modal-content">${html}</div>
         <div class="custom-modal-actions">
-            <button class="custom-btn custom-btn-confirm" onclick="pullNotesFromGitHub()" title="Pobierz notes.json do LOCAL_DB">
+            <button class="custom-btn custom-btn-confirm" onclick="pullNotesFromGitHub()" title="Pobierz terminal.json do LOCAL_DB">
                 <i class="fas fa-download"></i> Pull
             </button>
-            <button class="custom-btn custom-btn-confirm" onclick="pushNotesToGitHub()" title="Wgraj do new-note.json na GitHub (copy / pobierz)">
+            <button class="custom-btn custom-btn-confirm" onclick="pushNotesToGitHub()" title="Wgraj terminal.json na GitHub (merge: zdalne + lokalne)">
                 <i class="fas fa-upload"></i> Push
             </button>
-            <button class="custom-btn custom-btn-cancel" onclick="CustomUI.close()">Zamknij</button>
+            <button class="custom-btn custom-btn-cancel" onclick="CustomUI.close()"><i class="fas fa-xmark"></i> Zamknij</button>
         </div>
     `;
 };
@@ -1301,29 +1313,46 @@ window.pullNotesFromGitHub = async function () {
     }
 };
 
+/** Z poziomu LOCAL_DB: wyślij lokalne notatki do repozytorium (merge z zdalnym), potem odśwież listę. */
+window.pushLocalToGitHub = async function () {
+    await window.pushNotesToGitHub();
+    showLocalFiles();
+};
+
 window.pushNotesToGitHub = async function () {
-    const { json, arr } = buildPushPayloadFromLocal();
+    let json, arr;
+    try {
+        const merged = await buildMergedNotesJson();
+        json = merged.json;
+        arr = merged.arr;
+    } catch (e) {
+        CustomUI.toast("Merge/Pull: " + (e.message || String(e)), "error");
+        json = JSON.stringify(buildNotesArray(), null, 2);
+        arr = buildNotesArray();
+    }
     const token = getGitHubToken();
     if (token) {
         try {
             await pushJsonToGitHubApi(json);
-            CustomUI.toast("Wgrano new-note.json na GitHub", "success");
+            CustomUI.toast("Wgrano terminal.json na GitHub", "success");
         } catch (e) {
-            CustomUI.toast("Push do GitHub: " + (e.message || String(e)), "error");
+            const msg = e && (e.message || String(e));
+            const hint = /failed to fetch|network| cors/i.test(msg) ? " (otwórz przez http:// lub sprawdź sieć)" : "";
+            CustomUI.toast("Push do GitHub: " + msg + hint, "error");
         }
     }
     navigator.clipboard.writeText(json).then(
-        () => CustomUI.toast("Skopiowano new-note.json do schowka", "success"),
+        () => CustomUI.toast("Skopiowano terminal.json do schowka", "success"),
         () => CustomUI.toast("Schowek niedostępny", "error")
     );
     const a = document.createElement("a");
     a.href = URL.createObjectURL(new Blob([json], { type: "application/json" }));
-    a.download = PUSH_TARGET_FILE;
+    a.download = GITHUB_FILE;
     a.click();
     URL.revokeObjectURL(a.href);
     setSyncedNoteNames(arr.map((item) => item.name));
     if (!token) {
-        CustomUI.toast("Pobrano " + PUSH_TARGET_FILE, "success");
+        CustomUI.toast("Pobrano " + GITHUB_FILE, "success");
     }
 }
 
@@ -2134,7 +2163,7 @@ function showSettings() {
                         <span>Auto transfer local → GitHub</span>
                         <input type="checkbox" id="autoTransferToGitHubCheckbox" class="settings-github-checkbox" ${getAutoTransferToGitHub() ? 'checked' : ''} onchange="setAutoTransferToGitHub(this.checked); CustomUI.toast(this.checked ? 'Auto transfer włączony' : 'Auto transfer wyłączony', 'success');">
                     </label>
-                    <p class="settings-github-hint">Po zapisie (Zapisz / Aktualizuj / Import) dane są po ok. 2,5 s wgrywane do new-note.json. Wymaga tokenu.</p>
+                    <p class="settings-github-hint">Po zapisie (Zapisz / Aktualizuj / Import) dane są po ok. 2,5 s wgrywane do terminal.json (merge z zdalnym). Wymaga tokenu.</p>
                 </div>
             </div>
         </div>
@@ -2183,4 +2212,3 @@ document.addEventListener("DOMContentLoaded", function () {
         }
     });
 });
-
