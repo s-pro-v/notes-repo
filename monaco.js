@@ -224,15 +224,22 @@ function decompressFromStorage(raw) {
     return decompressBytes(bytes, format);
 }
 
+/** Base64 dla UTF-8 (zamiast przestarzałego btoa(unescape(encodeURIComponent(...)))). */
+function utf8ToBase64(str) {
+    const bytes = new TextEncoder().encode(str);
+    return btoa(String.fromCharCode.apply(null, bytes));
+}
+
 const CustomUI = {
     toastContainer: null,
 
     _getToastContainer: function () {
         if (!this.toastContainer || !this.toastContainer.parentNode) {
-            this.toastContainer = document.querySelector(".custom-toast-container");
+            this.toastContainer = document.querySelector("#toast-container, .toast-container, .custom-toast-container");
             if (!this.toastContainer) {
                 this.toastContainer = document.createElement("div");
-                this.toastContainer.className = "custom-toast-container";
+                this.toastContainer.id = "toast-container";
+                this.toastContainer.className = "toast-container custom-toast-container";
                 document.body.appendChild(this.toastContainer);
             }
         }
@@ -245,14 +252,37 @@ const CustomUI = {
         return t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     },
 
+    _mapAlertType: function (type, isDanger) {
+        if (isDanger) return 'critical';
+        const map = { info: 'info', success: 'success', error: 'critical', warning: 'warning' };
+        return map[type] || 'warning';
+    },
+
+    _alertHeaderLabel: function (alertType) {
+        const labels = {
+            critical: 'ALERT KRYTYCZNY',
+            warning: 'OSTRZEŻENIE',
+            success: 'SUKCES',
+            info: 'INFORMACJA'
+        };
+        return labels[alertType] || 'SYSTEM ALERT';
+    },
+
+    _toastClass: function (type) {
+        const map = { info: 'toast-info', success: 'toast-success', error: 'toast-critical', warning: 'toast-warning' };
+        return map[type] || '';
+    },
+
     close: function (force = false) {
         const overlay = document.querySelector(".custom-modal-overlay");
         if (overlay) {
+            const systemAlert = overlay.querySelector(".system-alert-modal");
+            if (systemAlert) systemAlert.classList.remove("active");
             if (force) {
                 overlay.remove();
             } else {
                 overlay.classList.remove("visible");
-                setTimeout(() => overlay.remove(), 250);
+                setTimeout(() => overlay.remove(), 300);
             }
         }
     },
@@ -273,71 +303,103 @@ const CustomUI = {
         return modal;
     },
 
-    alert: function (title, message, type = 'info') {
-        const modal = this.createOverlay();
-        const T = this._esc(title);
-        const M = this._esc(message);
+    createSystemAlert: function (alertType = 'warning') {
+        this.close(false);
+        const overlay = document.createElement('div');
+        overlay.className = 'custom-modal-overlay';
+        const modal = document.createElement('div');
+        modal.className = 'system-alert-modal';
+        modal.setAttribute('data-alert-type', alertType);
+        const headerLabel = this._alertHeaderLabel(alertType);
         modal.innerHTML = `
-            <h2 class="custom-modal-title">${T}</h2>
-            <p class="custom-modal-message">${M}</p>
-            <div class="custom-modal-actions">
-                <button class="custom-btn custom-btn-confirm"><i class="fas fa-check"></i> OK</button>
+            <div class="modal-content">
+                <div class="system-alert-header">
+                    <h3 class="system-alert-title">${headerLabel}</h3>
+                    <button type="button" class="close-btn" aria-label="Zamknij">&times;</button>
+                </div>
+                <div class="system-alert-body"></div>
+                <div class="system-alert-footer"></div>
             </div>
         `;
-        modal.querySelector('button').onclick = () => this.close();
+        overlay.appendChild(modal);
+        document.body.appendChild(overlay);
+        overlay.offsetHeight;
+        overlay.classList.add('visible');
+        modal.classList.add('active');
+        modal.querySelector('.close-btn').onclick = () => this.close();
+        overlay.addEventListener('click', (e) => {
+            if (e.target === overlay) this.close();
+        });
+        return {
+            modal,
+            body: modal.querySelector('.system-alert-body'),
+            footer: modal.querySelector('.system-alert-footer')
+        };
+    },
+
+    alert: function (title, message, type = 'info') {
+        const alertType = this._mapAlertType(type);
+        const { body, footer } = this.createSystemAlert(alertType);
+        const T = this._esc(title);
+        const M = this._esc(message);
+        body.innerHTML = `
+            <div class="system-alert-main-title">${T}</div>
+            <p class="confirm-message">${M}</p>
+        `;
+        footer.innerHTML = `
+            <button type="button" class="system-alert-btn system-alert-btn-primary"><i class="fas fa-check"></i> OK</button>
+        `;
+        footer.querySelector('button').onclick = () => this.close();
     },
 
     confirm: function (title, message, confirmText = 'Tak', cancelText = 'Anuluj', isDanger = false) {
         return new Promise((resolve) => {
-            const modal = this.createOverlay();
+            const alertType = this._mapAlertType(isDanger ? 'error' : 'warning', isDanger);
+            const { modal, body, footer } = this.createSystemAlert(alertType);
             const T = this._esc(title);
             const M = this._esc(message);
             const CT = this._esc(confirmText);
             const XT = this._esc(cancelText);
-            modal.innerHTML = `
-                <h2 class="custom-modal-title">${T}</h2>
-                <p class="custom-modal-message">${M}</p>
-                <div class="custom-modal-actions">
-                    <button class="custom-btn custom-btn-cancel"><i class="fas fa-xmark"></i>${XT}</button>
-                    <button class="custom-btn ${isDanger ? 'custom-btn-danger' : 'custom-btn-confirm'}"><i class="fas fa-check"></i>${CT}</button>
-                </div>
+            const finish = (value) => { this.close(); resolve(value); };
+            modal.querySelector('.close-btn').onclick = () => finish(false);
+            body.innerHTML = `
+                <div class="system-alert-main-title">${T}</div>
+                <p class="confirm-message">${M}</p>
             `;
-            const confirmBtn = modal.querySelector('.custom-btn-confirm, .custom-btn-danger');
-            const cancelBtn = modal.querySelector('.custom-btn-cancel');
-            confirmBtn.onclick = () => { this.close(); resolve(true); };
-            cancelBtn.onclick = () => { this.close(); resolve(false); };
+            footer.innerHTML = `
+                <button type="button" class="cancel-btn"><i class="fas fa-xmark"></i>${XT}</button>
+                <button type="button" class="system-alert-btn system-alert-btn-primary"><i class="fas fa-check"></i>${CT}</button>
+            `;
+            footer.querySelector('.system-alert-btn').onclick = () => finish(true);
+            footer.querySelector('.cancel-btn').onclick = () => finish(false);
         });
     },
 
     prompt: function (title, label, defaultValue = '') {
         return new Promise((resolve) => {
-            const modal = this.createOverlay();
+            const { modal, body, footer } = this.createSystemAlert('info');
             const T = this._esc(title);
             const L = this._esc(label);
             const def = this._esc(defaultValue);
-            modal.innerHTML = `
-                <h2 class="custom-modal-title">${T}</h2>
-                <p class="custom-modal-message">${L}</p>
+            const finish = (value) => { this.close(); resolve(value); };
+            modal.querySelector('.close-btn').onclick = () => finish(null);
+            body.innerHTML = `
+                <div class="system-alert-main-title">${T}</div>
+                <p class="system-alert-prompt">${L}</p>
                 <input type="text" class="custom-input custom-prompt-input" value="${def}" autocomplete="off">
-                <div class="custom-modal-actions">
-                    <button class="custom-btn custom-btn-cancel"><i class="fas fa-xmark"></i> Anuluj</button>
-                    <button class="custom-btn custom-btn-confirm"><i class="fas fa-check"></i> Zatwierdź</button>
-                </div>
             `;
-            const input = modal.querySelector('input');
+            footer.innerHTML = `
+                <button type="button" class="cancel-btn"><i class="fas fa-xmark"></i> Anuluj</button>
+                <button type="button" class="system-alert-btn system-alert-btn-primary"><i class="fas fa-check"></i> Zatwierdź</button>
+            `;
+            const input = body.querySelector('input');
             input.focus();
             input.select();
             input.addEventListener('keyup', (e) => {
-                if (e.key === 'Enter') modal.querySelector('.custom-btn-confirm').click();
+                if (e.key === 'Enter') footer.querySelector('.system-alert-btn').click();
             });
-            modal.querySelector('.custom-btn-confirm').onclick = () => {
-                this.close();
-                resolve(input.value);
-            };
-            modal.querySelector('.custom-btn-cancel').onclick = () => {
-                this.close();
-                resolve(null);
-            };
+            footer.querySelector('.system-alert-btn').onclick = () => finish(input.value);
+            footer.querySelector('.cancel-btn').onclick = () => finish(null);
         });
     },
 
@@ -358,16 +420,18 @@ const CustomUI = {
     toast: function (message, type = 'info') {
         const container = this._getToastContainer();
         const toast = document.createElement('div');
-        toast.className = `custom-toast custom-toast-${type}`;
+        const toastTypeClass = this._toastClass(type);
+        toast.className = `toast custom-toast ${toastTypeClass}`.trim();
         let iconClass = 'fas fa-info-circle';
         if (type === 'success') iconClass = 'fas fa-check-circle';
         if (type === 'error') iconClass = 'fas fa-exclamation-circle';
+        if (type === 'warning') iconClass = 'fas fa-exclamation-triangle';
         toast.innerHTML = `<i class="${iconClass}"></i> <span>${this._esc(message)}</span>`;
         container.appendChild(toast);
         setTimeout(() => {
-            toast.style.animation = 'custom-toast-fadeOut 0.3s forwards';
+            toast.classList.add('closing');
             setTimeout(() => toast.remove(), 300);
-        }, 3000);
+        }, 4700);
     },
 
     showLoading: function (message = 'Ładowanie...') {
@@ -386,21 +450,21 @@ const CustomUI = {
     /** Modal w Twoim stylu: odświeżenie strony z niezapisanymi zmianami. Zwraca 'save' | 'reload' | 'cancel'. */
     confirmReload: function () {
         return new Promise((resolve) => {
-            const modal = this.createOverlay();
-            modal.innerHTML = `
-                <h2 class="custom-modal-title">Niezapisane zmiany</h2>
-                <p class="custom-modal-message">Masz niezapisane zmiany. Zapisać przed odświeżeniem?</p>
-                <div class="custom-modal-actions custom-modal-actions-three">
-                    <button class="custom-btn custom-btn-cancel" data-choice="cancel"><i class="fas fa-xmark"></i> Anuluj</button>
-                    <button class="custom-btn custom-btn-reload" data-choice="reload"><i class="fas fa-rotate-right"></i> Odśwież bez zapisu</button>
-                    <button class="custom-btn custom-btn-confirm" data-choice="save"><i class="fas fa-floppy-disk"></i> Zapisz i odśwież</button>
-                </div>
+            const { modal, body, footer } = this.createSystemAlert('warning');
+            const finish = (value) => { this.close(); resolve(value); };
+            modal.querySelector('.close-btn').onclick = () => finish('cancel');
+            body.innerHTML = `
+                <div class="system-alert-main-title">Niezapisane zmiany</div>
+                <p class="confirm-message">Masz niezapisane zmiany. Zapisać przed odświeżeniem?</p>
             `;
-            modal.querySelectorAll('[data-choice]').forEach((btn) => {
-                btn.onclick = () => {
-                    this.close();
-                    resolve(btn.getAttribute('data-choice'));
-                };
+            footer.classList.add('system-alert-footer-three');
+            footer.innerHTML = `
+                <button type="button" class="cancel-btn" data-choice="cancel"><i class="fas fa-xmark"></i> Anuluj</button>
+                <button type="button" class="system-alert-btn" data-choice="reload"><i class="fas fa-rotate-right"></i> Odśwież bez zapisu</button>
+                <button type="button" class="system-alert-btn system-alert-btn-primary" data-choice="save"><i class="fas fa-floppy-disk"></i> Zapisz i odśwież</button>
+            `;
+            footer.querySelectorAll('[data-choice]').forEach((btn) => {
+                btn.onclick = () => finish(btn.getAttribute('data-choice'));
             });
         });
     }
@@ -479,13 +543,21 @@ function updateUpdateButton() {
 function initMonaco() {
     require.config({ paths: { vs: 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.44.0/min/vs' } });
     require(['vs/editor/editor.main'], function () {
-        // Na starcie vs/vs-dark – monaco-style.js po 'load' ustawi terminal-dark/terminal-light
-        const theme = document.documentElement.getAttribute("data-theme") === "light" ? "vs" : "vs-dark";
+        if (typeof window.defineMonacoThemes === 'function') {
+            window.defineMonacoThemes();
+        }
+        const savedTheme = localStorage.getItem("theme");
+        const dataTheme = document.documentElement.getAttribute("data-theme");
+        const themeToUse = savedTheme || dataTheme || "dark";
+        if (savedTheme && savedTheme !== dataTheme) {
+            document.documentElement.setAttribute("data-theme", savedTheme);
+        }
+        const monacoTheme = themeToUse === "light" ? "terminal-light" : "terminal-dark";
 
         editor = monaco.editor.create(document.getElementById('editor'), {
             value: "// TERMINAL_READY\n// START_CODING...",
             language: 'javascript',
-            theme: theme,
+            theme: monacoTheme,
             fontSize: editorSettings.fontSize,
             fontFamily: editorSettings.fontFamily,
             lineHeight: editorSettings.lineHeight || 0,
@@ -693,7 +765,7 @@ window.clearEditor = async function () {
         const confirmed = await CustomUI.confirm(
             'NIEZAPISANE ZMIANY',
             'Masz niezapisane zmiany. Czy na pewno chcesz wyczyścić edytor?',
-            'Tak, wyczyść',
+            'Tak',
             'Anuluj',
             true
         );
@@ -702,7 +774,7 @@ window.clearEditor = async function () {
         const confirmed = await CustomUI.confirm(
             'CZYŚĆ BUFOR',
             'Czy na pewno chcesz wyczyścić edytor?',
-            'Tak, wyczyść',
+            'Tak',
             'Anuluj',
             false
         );
@@ -790,7 +862,7 @@ window.updateLoadedNote = async function () {
     const confirmed = await CustomUI.confirm(
         'AKTUALIZACJA NOTATKI',
         `Czy na pewno chcesz zaktualizować notatkę "${currentLoadedFile.name}"?`,
-        'Tak, aktualizuj',
+        'aktualizuj',
         'Anuluj',
         false
     );
@@ -826,7 +898,7 @@ window.importLocalDB = async function () {
     const confirmed = await CustomUI.confirm(
         'IMPORT LOCAL_DB',
         'Import zastąpi całą zawartość LOCAL_DB. Czy kontynuować?',
-        'Tak, importuj',
+        'importuj',
         'Anuluj',
         true
     );
@@ -917,7 +989,7 @@ function getGitHubApiHeaders(extra) {
     return extra ? { ...h, ...extra } : h;
 }
 
-window.saveGitHubToken = function () {
+function saveGitHubToken() {
     const input = document.getElementById("githubTokenInput");
     if (!input) return;
     const val = (input.value || "").trim();
@@ -934,9 +1006,9 @@ window.saveGitHubToken = function () {
         const hint = document.querySelector("#settings-github .settings-github-control .settings-github-hint");
         if (hint) { hint.textContent = "Pull/Push z repo s-pro-v/json-lista. Push: token z zapisem (Contents lub repo); w org. włącz SSO."; hint.classList.remove("settings-github-hint-token-saved"); hint.classList.add("settings-github-hint-token-empty"); }
     }
-};
+}
 
-window.clearGitHubToken = function () {
+function clearGitHubToken() {
     setGitHubToken(null);
     const input = document.getElementById("githubTokenInput");
     if (input) {
@@ -946,7 +1018,7 @@ window.clearGitHubToken = function () {
     const hint = document.querySelector("#settings-github .settings-github-control .settings-github-hint");
     if (hint) { hint.textContent = "Pull/Push z repo s-pro-v/json-lista. Push: token z zapisem (Contents lub repo); w org. włącz SSO."; hint.classList.remove("settings-github-hint-token-saved"); hint.classList.add("settings-github-hint-token-empty"); }
     CustomUI.toast("Token GitHub usunięty", "success");
-};
+}
 
 function getAutoTransferToGitHub() {
     try {
@@ -1017,7 +1089,7 @@ async function pushJsonToGitHubApi(json) {
         sha = fileInfo.sha || null;
     }
     const { data: payload, compressed } = await compressForSync(json);
-    const content = compressed ? payload : btoa(unescape(encodeURIComponent(json)));
+    const content = compressed ? payload : utf8ToBase64(json);
     const putBody = {
         message: "Update terminal.json",
         content: content,
@@ -1471,15 +1543,15 @@ function updateSelectUI(lang) {
     syncSyntaxSelectFromModel();
 }
 
-window.exportJSON = () => {
+function exportJSON() {
     const data = { content: editor.getValue(), language: editor.getModel().getLanguageId(), timestamp: Date.now() };
     const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob); a.download = 'terminal_backup.json'; a.click();
     markAsSaved();
-};
+}
 
-window.importJSON = async function () {
+async function importJSON() {
     if (checkUnsavedChanges()) {
         const confirmed = await CustomUI.confirm(
             'NIEZAPISANE ZMIANY',
@@ -1506,7 +1578,7 @@ window.importJSON = async function () {
         reader.readAsText(e.target.files[0]);
     };
     input.click();
-};
+}
 
 // Odświeżenie (F5 / Ctrl+R): Twój modal zamiast alertu przeglądarki; przed reload zapisujemy, którą notatkę przywrócić
 window.addEventListener('keydown', function (e) {
@@ -1525,7 +1597,7 @@ window.addEventListener('keydown', function (e) {
     });
 });
 
-// Obsługa zmiany motywu (używa Twoich motywów terminal-light / terminal-dark z monaco-style.js)
+// Obsługa zmiany motywu (terminal-light / terminal-dark z monaco-css.js)
 window.toggleTheme = function () {
     const currentTheme = document.documentElement.getAttribute("data-theme");
     const newTheme = currentTheme === "light" ? "dark" : "light";
@@ -1676,7 +1748,7 @@ window.toggleSettings = function () {
     overlay.classList.toggle('active');
 };
 
-window.closeSettings = function () {
+function closeSettings() {
     const sidebar = document.getElementById('settingsSidebar');
     const overlay = document.getElementById('settingsOverlay');
     if (sidebar) sidebar.classList.remove('active');
