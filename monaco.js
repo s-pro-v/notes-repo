@@ -224,10 +224,31 @@ function decompressFromStorage(raw) {
     return decompressBytes(bytes, format);
 }
 
-/** Base64 dla UTF-8 (zamiast przestarzałego btoa(unescape(encodeURIComponent(...)))). */
+/**
+ * Bezpieczna konwersja UTF-8 string -> Base64 bez limitu wielkości i problemów z kodowaniem znaków diakrytycznych
+ */
 function utf8ToBase64(str) {
     const bytes = new TextEncoder().encode(str);
-    return btoa(String.fromCharCode.apply(null, bytes));
+    let binary = '';
+    const len = bytes.byteLength;
+    const chunkSize = 0x8000; // 32KB chunks aby uniknąć stack overflow
+    for (let i = 0; i < len; i += chunkSize) {
+        binary += String.fromCharCode.apply(null, bytes.subarray(i, Math.min(i + chunkSize, len)));
+    }
+    return btoa(binary);
+}
+
+/**
+ * Bezpieczne dekodowanie Base64 -> UTF-8 string
+ */
+function base64ToUtf8(b64) {
+    const binary = atob(b64.replace(/\s/g, ''));
+    const len = binary.length;
+    const bytes = new Uint8Array(len);
+    for (let i = 0; i < len; i++) {
+        bytes[i] = binary.charCodeAt(i);
+    }
+    return new TextDecoder().decode(bytes);
 }
 
 const CustomUI = {
@@ -541,7 +562,7 @@ function updateUpdateButton() {
 }
 
 function initMonaco() {
-    require.config({ paths: { vs: 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.44.0/min/vs' } });
+    require.config({ paths: { vs: 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.52.0/min/vs' } });
     require(['vs/editor/editor.main'], function () {
         if (typeof window.defineMonacoThemes === 'function') {
             window.defineMonacoThemes();
@@ -674,21 +695,21 @@ function updateStatusBar() {
     if (!monacoLoaded) return;
     const pos = editor.getPosition();
     const model = editor.getModel();
-    const unsavedIndicator = hasUnsavedChanges ? ' <img src="https://api.iconify.design/ph:warning-circle-duotone.svg" width="18" height="18" class="status-icon-red"><span style="color: rgba(var(--danger-rgb), 1);"> NIEZAPISANE</span>' : '';
+    const unsavedIndicator = hasUnsavedChanges ? ' <img src="https://api.iconify.design/ph/warning-circle-duotone.svg" width="18" height="18" class="status-icon-red"><span style="color: rgba(var(--danger-rgb), 1);"> NIEZAPISANE</span>' : '';
     const fileIndicator = currentLoadedFile ? ` <span style="color: var(--highlight-color);">• ${currentLoadedFile.name}</span>` : '';
-    const statusIcon = hasUnsavedChanges ? '<img src="https://api.iconify.design/ph:warning-duotone.svg" width="18" height="18" class="file-icon">' : '<img src="https://api.iconify.design/ph:check-square-duotone.svg" width="18" height="18" class="status-icon">';
-    const fileIcon = currentLoadedFile ? '<img src="https://api.iconify.design/ph:clipboard-text-duotone.svg" width="18" height="18" class="file-icon">' : '<img src="https://api.iconify.design/ph:clipboard-duotone.svg" width="18" height="18" class="file-icon">';
+    const statusIcon = hasUnsavedChanges ? '<img src="https://api.iconify.design/ph/warning-duotone.svg" width="18" height="18" class="file-icon">' : '<img src="https://api.iconify.design/ph/check-square-duotone.svg" width="18" height="18" class="status-icon">';
+    const fileIcon = currentLoadedFile ? '<img src="https://api.iconify.design/ph/clipboard-text-duotone.svg" width="18" height="18" class="file-icon">' : '<img src="https://api.iconify.design/ph/clipboard-duotone.svg" width="18" height="18" class="file-icon">';
     // Language icon mapping
     const langIcons = {
-        'javascript': 'https://api.iconify.design/material-icon-theme:javascript.svg',
-        'json': 'https://api.iconify.design/vscode-icons:file-type-light-json.svg',
-        'html': 'https://api.iconify.design/vscode-icons:file-type-html.svg',
-        'css': 'https://api.iconify.design/vscode-icons:file-type-css2.svg',
-        'xml': 'https://api.iconify.design/vscode-icons:file-type-xml.svg',
-        'plaintext': 'https://api.iconify.design/material-icon-theme:latexmk.svg'
+        'javascript': 'https://api.iconify.design/material-icon-theme/javascript.svg',
+        'json': 'https://api.iconify.design/vscode-icons/file-type-light-json.svg',
+        'html': 'https://api.iconify.design/vscode-icons/file-type-html.svg',
+        'css': 'https://api.iconify.design/vscode-icons/file-type-css2.svg',
+        'xml': 'https://api.iconify.design/vscode-icons/file-type-xml.svg',
+        'plaintext': 'https://api.iconify.design/material-icon-theme/latexmk.svg'
     };
     const currentLang = model.getLanguageId();
-    const langIcon = langIcons[currentLang] || 'https://api.iconify.design/vscode-icons:file-type-json2.svg';
+    const langIcon = langIcons[currentLang] || 'https://api.iconify.design/vscode-icons/file-type-json2.svg';
     const langIconHtml = `<img src="${langIcon}" width="18" height="18" class="lang-icon">`;
     document.getElementById('statusText').innerHTML = `${statusIcon} SYSTEM_READY | ${fileIcon} [LN ${pos.lineNumber}, COL ${pos.column}] | LANG: ${langIconHtml}${fileIndicator}${unsavedIndicator}`;
 }
@@ -1077,38 +1098,69 @@ async function buildMergedNotesJson() {
     return { json, arr };
 }
 
-/** Wysyła JSON na GitHub (PUT). Zwraca true jeśli OK. Rzuca lub zwraca false przy błędzie. Używa Brotli/gzip przy większym payloadzie. */
-async function pushJsonToGitHubApi(json) {
+/**
+ * Wysyła zaktualizowany terminal.json do GitHub Contents API
+ */
+async function pushJsonToGitHubApi(jsonString) {
     const token = getGitHubToken();
-    if (!token) return false;
-    let sha = null;
-    const getUrl = GITHUB_PUSH_API_URL + "?ref=" + encodeURIComponent(GITHUB_BRANCH);
-    const getRes = await fetch(getUrl, { headers: getGitHubApiHeaders() });
-    if (getRes.ok) {
-        const fileInfo = await getRes.json();
-        sha = fileInfo.sha || null;
+    if (!token) {
+        throw new Error("Brak zapisanego tokenu GitHub w Ustawieniach.");
     }
-    const { data: payload, compressed } = await compressForSync(json);
-    const content = compressed ? payload : utf8ToBase64(json);
+
+    // 1. Pobierz aktualne SHA pliku z brancha main
+    let sha = null;
+    const getUrl = `${GITHUB_PUSH_API_URL}?ref=${encodeURIComponent(GITHUB_BRANCH)}`;
+    
+    try {
+        const getRes = await fetch(getUrl, {
+            headers: getGitHubApiHeaders()
+        });
+        
+        if (getRes.ok) {
+            const fileInfo = await getRes.json();
+            sha = fileInfo.sha || null;
+        } else if (getRes.status !== 404) {
+            const err = await getRes.json().catch(() => ({}));
+            throw new Error(`Błąd pobierania SHA (${getRes.status}): ${err.message || getRes.statusText}`);
+        }
+    } catch (e) {
+        console.warn("Nie udało się pobrać poprzedniego SHA (plik może być tworzony na nowo):", e);
+    }
+
+    // 2. Przygotuj payload w standardowym Base64 (czytelnym dla GitHuba i raw URL)
+    const base64Content = utf8ToBase64(jsonString);
+
     const putBody = {
-        message: "Update terminal.json",
-        content: content,
+        message: `Sync notes [${new Date().toISOString()}]`,
+        content: base64Content,
         branch: GITHUB_BRANCH
     };
-    if (sha) putBody.sha = sha;
+
+    if (sha) {
+        putBody.sha = sha;
+    }
+
+    // 3. Wysłanie żądania PUT
     const putRes = await fetch(GITHUB_PUSH_API_URL, {
         method: "PUT",
-        headers: getGitHubApiHeaders({ "Content-Type": "application/json" }),
+        headers: getGitHubApiHeaders({
+            "Content-Type": "application/json"
+        }),
         body: JSON.stringify(putBody)
     });
+
     if (!putRes.ok) {
-        let errText = await putRes.text();
-        let msg = putRes.status + ": " + (errText || "").slice(0, 200);
-        try { const errJson = JSON.parse(errText); if (errJson.message) msg = putRes.status + ": " + errJson.message; } catch (_) { }
-        if (putRes.status === 403) msg += " Token: zapis do repo lub SSO.";
+        const errJson = await putRes.json().catch(() => ({}));
+        let msg = errJson.message || `HTTP ${putRes.status}`;
+        if (putRes.status === 403) {
+            msg += " (Sprawdź uprawnienia Contents: Read/Write w Fine-Grained tokenie lub zakres 'repo')";
+        } else if (putRes.status === 409) {
+            msg += " (Konflikt SHA – spróbuj ponownie za chwilę)";
+        }
         throw new Error(msg);
     }
-    return true;
+
+    return await putRes.json();
 }
 
 function scheduleAutoTransferToGitHub() {
@@ -1391,42 +1443,45 @@ window.pushLocalToGitHub = async function () {
     showLocalFiles();
 };
 
+/**
+ * Główna procedura wysyłki (scalenie bazy lokalnej z GitHubem i upload)
+ */
 window.pushNotesToGitHub = async function () {
-    let json, arr;
-    try {
-        const merged = await buildMergedNotesJson();
-        json = merged.json;
-        arr = merged.arr;
-    } catch (e) {
-        CustomUI.toast("Merge/Pull: " + (e.message || String(e)), "error");
-        json = JSON.stringify(buildNotesArray(), null, 2);
-        arr = buildNotesArray();
-    }
     const token = getGitHubToken();
-    if (token) {
-        try {
-            await pushJsonToGitHubApi(json);
-            CustomUI.toast("Wgrano terminal.json na GitHub", "success");
-        } catch (e) {
-            const msg = e && (e.message || String(e));
-            const hint = /failed to fetch|network| cors/i.test(msg) ? " (otwórz przez http:// lub sprawdź sieć)" : "";
-            CustomUI.toast("Push do GitHub: " + msg + hint, "error");
-        }
-    }
-    navigator.clipboard.writeText(json).then(
-        () => CustomUI.toast("Skopiowano terminal.json do schowka", "success"),
-        () => CustomUI.toast("Schowek niedostępny", "error")
-    );
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(new Blob([json], { type: "application/json" }));
-    a.download = GITHUB_FILE;
-    a.click();
-    URL.revokeObjectURL(a.href);
-    setSyncedNoteNames(arr.map((item) => item.name));
     if (!token) {
-        CustomUI.toast("Pobrano " + GITHUB_FILE, "success");
+        CustomUI.toast("Brak tokenu GitHub! Ustaw go w panelu USTAWIEŃ.", "error");
+        // Opcjonalny zrzut do pliku jeśli brak autoryzacji
+        const localArr = buildNotesArray();
+        const json = JSON.stringify(localArr, null, 2);
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(new Blob([json], { type: "application/json" }));
+        a.download = GITHUB_FILE;
+        a.click();
+        URL.revokeObjectURL(a.href);
+        return;
     }
-}
+
+    CustomUI.showLoading("Wysyłanie danych do GitHuba...");
+
+    try {
+        // 1. Zbuduj połączony JSON (lokalne notatki nadpisują/uzupełniają zdalne)
+        const { json, arr } = await buildMergedNotesJson();
+
+        // 2. Wyślij przez API
+        await pushJsonToGitHubApi(json);
+
+        // 3. Zaktualizuj stan zsynchronizowanych plików
+        setSyncedNoteNames(arr.map((item) => item.name));
+        
+        CustomUI.hideLoading();
+        CustomUI.toast("Pomyślnie zsynchronizowano z GitHubem!", "success");
+    } catch (e) {
+        CustomUI.hideLoading();
+        const msg = e && (e.message || String(e));
+        console.error("Błąd podczas GitHub Push:", e);
+        CustomUI.alert("BŁĄD PUSH", `Nie udało się wysłać danych do repozytorium:\n${msg}`, "error");
+    }
+};
 
 window.loadGit = async function (idx) {
     if (checkUnsavedChanges()) {

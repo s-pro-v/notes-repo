@@ -90,6 +90,13 @@
     --json-string: #85e89d;
     --json-number: #79b8ff;
     --json-boolean: #f97583;
+    --hover-bg: #3e3e3e;
+    --transition-speed: 0.2s;
+    --transition-ease: ease;
+    --transition-ui: background-color var(--transition-speed) var(--transition-ease),
+        color var(--transition-speed) var(--transition-ease),
+        border-color var(--transition-speed) var(--transition-ease),
+        box-shadow var(--transition-speed) var(--transition-ease);
 }
 
 :root[data-theme="light"] {
@@ -202,6 +209,14 @@
     --json-string: var(--success-color);
     --json-number: #005cc5;
     --json-boolean: var(--danger-color);
+
+    --hover-bg: #eee;
+    --transition-speed: 0.2s;
+    --transition-ease: ease;
+    --transition-ui: background-color var(--transition-speed) var(--transition-ease),
+        color var(--transition-speed) var(--transition-ease),
+        border-color var(--transition-speed) var(--transition-ease),
+        box-shadow var(--transition-speed) var(--transition-ease);
 }
 
 * {
@@ -336,16 +351,14 @@ body {
 
 .toolbar-group {
     display: flex;
-    gap: 0.05rem;
+    gap: 0.125rem;
     align-items: center;
     box-shadow: var(--shadow-inset);
-    padding: 0.2rem;
+    padding: 0.125rem;
     box-sizing: border-box;
     background-color: var(--bg);
     border: 1px solid var(--bg-secondary);
-    outline: 1px solid var(--bg-tertiary);
-    outline-offset: -2px;
-    outline-width: 1px;
+    overflow: hidden;
 }
 
 .toolbar button {
@@ -864,27 +877,31 @@ body {
 }
 
 .local-files-grid {
+    position: relative;
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(222px, 1fr));
-    gap: 0.5rem;
-    padding: 0.5rem;
+    gap: 0.125rem;
+    padding: 0.125rem;
+    box-shadow: var(--shadow-inset);
+    overflow: hidden;
 }
 
 .local-file-card {
-    background: var(--bg);
+    background-color: var(--bg);
     border: 1px solid var(--border-color);
     display: flex;
     flex-direction: column;
     text-decoration: none;
     color: var(--text-color);
-    transition: all 0.2s ease;
+    transition: var(--transition-ui);
     width: 100%;
     box-shadow: var(--shadow-drop);
+    opacity: 0.8;
 }
 
 .local-file-card:hover {
-    opacity: 0.8;
-    color: var(--highlight-color);
+    opacity: 1;
+    background-color: var(--bg);
 }
 
 .local-file-card:active {
@@ -1267,21 +1284,23 @@ body {
 
 .custom-modal-content {
     overflow-y: auto;
-    margin-bottom: 20px;
-    padding: 0.5rem 1rem;
+    margin-bottom: 10px;
+    padding: 0.125rem;
 }
 
 .custom-modal-actions {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    /* gap: 0.2rem; */
-    margin-top: auto;
-    padding: 0.75rem 1rem;
+    gap: 0.125rem;
     border-top: 1px solid var(--border-color);
     background: var(--panel-bg);
-    box-shadow: var(--shadow-drop);
+    box-shadow: var(--shadow-inset);
     flex-direction: row;
+    overflow: hidden;
+    margin: 0.125rem;
+    min-height: fit-content;
+    padding: 0.125rem;
 }
 
 .custom-modal-actions-three {
@@ -1345,6 +1364,7 @@ body {
     letter-spacing: 0.04em;
     white-space: nowrap;
     color: var(--text-muted);
+    width: 100%;
 }
 
 .custom-btn-confirm {
@@ -2482,6 +2502,25 @@ body {
     height: 36px;
 }
 
+.toolbar-group:has(.ja-open),
+.ja-select-wrap:has(.ja-open) {
+    position: relative;
+    z-index: 10000;
+}
+
+.ja-select-list {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    z-index: 10001;
+    box-sizing: border-box;
+}
+
+.toolbar-group:has(.ja-select-wrap) {
+    overflow: visible;
+}
+
 .setting-control {
     display: flex;
     align-items: center;
@@ -2766,9 +2805,9 @@ body {
     flex-direction: row;
     align-items: center;
     justify-content: center;
-    gap: 0.2rem;
+    gap: 0.125rem;
     box-sizing: border-box;
-    padding: 0.25rem 0.15rem;
+    padding: 0.125rem;
     background: var(--panel-bg);
     border: 1px solid var(--border-color);
     box-shadow: var(--shadow-inset);
@@ -2778,4 +2817,5 @@ body {
     left: 70px;
     width: 110px;
     height: 57px;
+    overflow: hidden;
 }
